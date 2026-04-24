@@ -1,3 +1,4 @@
+# Load environment variables from .env
 import os
 from dotenv import load_dotenv
 load_dotenv()
@@ -15,16 +16,20 @@ else:
     os.environ["MODEL"] = "ollama/phi3"
 from crewai import Agent, Crew, Process, Task
 from crewai.project import CrewBase, agent, crew, task
-from crewai.agents.agent_builder.base_agent import BaseAgent
-from crewai_tools import JSONSearchTool
+from crewai_tools import JSONSearchTool, SerperDevTool
+from crewai.knowledge.knowledge import Knowledge
 from crewai.knowledge.source.string_knowledge_source import StringKnowledgeSource
+from crewai.tools import tool
 from typing import List
 import os
+import json
 
-from langchain_community.embeddings import HuggingFaceEmbeddings
+from langchain_huggingface import HuggingFaceEmbeddings
 
 # Workaround for early CrewAI-Tools versions that enforce OpenAI Key validation via Pydantic
-os.environ["OPENAI_API_KEY"] = os.environ.get("OPENAI_API_KEY", "NA")
+os.environ["HF_HUB_OFFLINE"] = "1"
+if not os.environ.get("OPENAI_API_KEY"):
+    os.environ["OPENAI_API_KEY"] = "NA"
 
 # Embedding Model for converting text to numerical representations
 embedding_model = HuggingFaceEmbeddings(
@@ -41,6 +46,29 @@ rag_config = {
 }
 
 # === Step 3: Configure RAG Tools (CrewAI RAG Tools) ===
+def ensure_chroma_index():
+    from crewai.utilities.paths import db_storage_path
+    import tarfile
+    import os
+    
+    db_dir = db_storage_path()
+    db_file = os.path.join(db_dir, "chroma.sqlite3")
+    archive_path = r"C:\Users\MCC\Downloads\chroma_index.tar.gz"
+    
+    if not os.path.exists(db_file) and os.path.exists(archive_path):
+        print(f"Index database not found. Extracting from {archive_path}...")
+        if not os.path.exists(db_dir):
+            os.makedirs(db_dir, exist_ok=True)
+        try:
+            with tarfile.open(archive_path, "r:gz") as tar:
+                tar.extractall(path=db_dir)
+            print("Extraction complete.")
+        except Exception as e:
+            print(f"Error extracting index: {e}")
+
+# Call the ensure function before creating tools
+ensure_chroma_index()
+
 def create_rag_tool(json_path: str, collection_name: str, config: dict, name: str, description: str) -> JSONSearchTool:
     from crewai.utilities.paths import db_storage_path
     from crewai_tools.tools.json_search_tool.json_search_tool import FixedJSONSearchToolSchema
@@ -76,7 +104,7 @@ def create_rag_tool(json_path: str, collection_name: str, config: dict, name: st
     return tool
 
 user_rag_tool = create_rag_tool(
-    json_path='data/filtered_user.json',
+    json_path='data/user_subset.json',
     collection_name='benchmark_true_fresh_index_Filtered_User_1',
     config=rag_config,
     name="search_user_profile_data",
@@ -89,7 +117,7 @@ user_rag_tool = create_rag_tool(
 )
 
 item_rag_tool = create_rag_tool(
-    json_path='data/filtered_item.json',
+    json_path='data/item_subset.json',
     collection_name='benchmark_true_fresh_index_Filtered_Item_1',
     config=rag_config,
     name="search_restaurant_feature_data",
@@ -102,7 +130,7 @@ item_rag_tool = create_rag_tool(
 )
 
 review_rag_tool = create_rag_tool(
-    json_path='data/test_review.json',
+    json_path='data/review_subset.json',
     collection_name='benchmark_true_fresh_index_Filtered_Review_1',
     config=rag_config,
     name="search_historical_reviews_data",
@@ -123,68 +151,219 @@ schema_knowledge = StringKnowledgeSource(
     metadata={"source": "Yelp Schema Definition"}
 )
 
+# New Knowledge: Exploratory Data Analysis (EDA)
+with open('docs/eda_findings.md', 'r', encoding='utf-8') as f:
+    eda_content = f.read()
+eda_knowledge = StringKnowledgeSource(
+    content=eda_content,
+    metadata={"source": "Exploratory Data Analysis findings"}
+)
+
+# === Step 4: Configure Exact Lookup Tools (Python Tools) ===
+@tool("lookup_user_by_id")
+def lookup_user_by_id(user_id: str) -> str:
+    """Look up a user's exact profile. 
+    Input MUST be just the raw user_id string. 
+    Example: {"user_id": "nnImk681KaRqUVHlSfZjGQ"}"""
+    json_path = 'data/user_subset.json'
+    if not os.path.exists(json_path):
+        return f"File {json_path} not found."
+        
+    with open(json_path, 'r', encoding='utf-8') as f:
+        for line in f:
+            if not line.strip(): continue
+            record = json.loads(line)
+            if record.get('user_id') == user_id:
+                # Remove long friends list to save tokens
+                record.pop('friends', None)
+                return json.dumps(record)
+    return f"User {user_id} not found in exact lookup. Use search tools as fallback."
+
+@tool("lookup_item_by_id")
+def lookup_item_by_id(item_id: str) -> str:
+    """Look up a business's profile. 
+    Input MUST be just the raw item_id string. 
+    Example: {"item_id": "-7GjicSH_rM8JeZGCXGcUg"}"""
+    json_path = 'data/item_subset.json'
+    if not os.path.exists(json_path):
+        return f"File {json_path} not found."
+
+    with open(json_path, 'r', encoding='utf-8') as f:
+        for line in f:
+            if not line.strip(): continue
+            record = json.loads(line)
+            if record.get('business_id') == item_id or record.get('item_id') == item_id:
+                return json.dumps(record)
+    return f"Item {item_id} not found in exact lookup. Use search tools as fallback."
+
+@tool("lookup_reviews_by_user_id")
+def lookup_reviews_by_user_id(user_id: str) -> str:
+    """Look up historical reviews by user_id. 
+    Input MUST be just the raw user_id string. 
+    Example: {"user_id": "nnImk681KaRqUVHlSfZjGQ"}"""
+    json_path = 'data/review_subset.json'
+    if not os.path.exists(json_path):
+        return f"File {json_path} not found."
+    
+    matches = []
+    with open(json_path, 'r', encoding='utf-8') as f:
+        for line in f:
+            if not line.strip(): continue
+            record = json.loads(line)
+            if record.get('user_id') == user_id:
+                matches.append(record)
+    
+    if matches:
+        return json.dumps(matches[:10]) # Return up to 10 latest reviews
+    return f"No reviews found for user {user_id}. Use search tools as fallback."
+
+@tool("lookup_reviews_by_business_id")
+def lookup_reviews_by_business_id(business_id: str) -> str:
+    """Look up all reviews for a specific business_id (item_id). Returns a list of review objects."""
+    json_path = 'data/review_subset.json'
+    if not os.path.exists(json_path):
+        return f"File {json_path} not found."
+    
+    matches = []
+    with open(json_path, 'r', encoding='utf-8') as f:
+        for line in f:
+            if not line.strip(): continue
+            record = json.loads(line)
+            if record.get('business_id') == business_id or record.get('item_id') == business_id:
+                matches.append(record)
+    
+    if matches:
+        return json.dumps(matches[:10]) # Return up to 10 latest reviews
+    return f"No reviews found for business {business_id}. Use search tools as fallback."
+
 @CrewBase
 class FirstCrew():
     """Yelp Recommendation Crew"""
-    agents: List[BaseAgent]
-    tasks: List[Task]
+    agents_config = 'config/agents.yaml'
+    tasks_config = 'config/tasks.yaml'
 
-    # === Step 6: System Assembly & Tool Binding ===
-    # Mount specific RAG Tools onto specific Agents
+    # === Step 6: Dynamic Agent Definitions ===
     @agent
     def user_analyst(self) -> Agent:
+        process_type = os.getenv("PROCESS_TYPE", "hierarchical").lower()
         return Agent(
             config=self.agents_config['user_analyst'], # type: ignore[index]
-            tools=[user_rag_tool, review_rag_tool],
-            verbose=True
+            tools=[lookup_user_by_id, lookup_reviews_by_user_id, user_rag_tool, review_rag_tool],
+            verbose=True,
+            allow_delegation=(process_type == "collaborative"), # Enabled ONLY for collaborative mode
+            max_iter=6
         )
 
     @agent
     def item_analyst(self) -> Agent:
+        process_type = os.getenv("PROCESS_TYPE", "hierarchical").lower()
         return Agent(
             config=self.agents_config['item_analyst'], # type: ignore[index]
-            tools=[item_rag_tool, review_rag_tool],
-            verbose=True
+            tools=[lookup_item_by_id, lookup_reviews_by_business_id, item_rag_tool, review_rag_tool],
+            verbose=True,
+            allow_delegation=(process_type == "collaborative"),
+            max_iter=6
         )
 
     @agent
     def prediction_modeler(self) -> Agent:
         return Agent(
             config=self.agents_config['prediction_modeler'], # type: ignore[index]
-            verbose=True
+            verbose=True,
+            allow_delegation=False,
+            max_iter=6
         )
 
+    @agent
+    def manager(self) -> Agent:
+        return Agent(
+            config=self.agents_config['manager'], # type: ignore[index]
+            verbose=True,
+            allow_delegation=True
+        )
+
+    @agent
+    def web_researcher(self) -> Agent:
+        tools = []
+        if os.getenv("SERPER_API_KEY"):
+            tools.append(SerperDevTool())
+        
+        return Agent(
+            config=self.agents_config['web_researcher'], # type: ignore[index]
+            tools=tools,
+            verbose=True,
+            allow_delegation=False
+        )
+
+    # === Step 7: Dynamic Task Binding ===
     @task
     def analyze_user_task(self) -> Task:
-        return Task(
-            config=self.tasks_config['analyze_user_task'], # type: ignore[index]
-        )
+        return Task(config=self.tasks_config['analyze_user_task'])
 
     @task
     def analyze_item_task(self) -> Task:
+        return Task(config=self.tasks_config['analyze_item_task'])
+
+    @task
+    def web_research_task(self) -> Task:
         return Task(
-            config=self.tasks_config['analyze_item_task'], # type: ignore[index]
+            config=self.tasks_config['web_research_task'],
+            context=[self.analyze_item_task()]
         )
 
     @task
     def predict_review_task(self) -> Task:
         return Task(
-            config=self.tasks_config['predict_review_task'], # type: ignore[index]
+            config=self.tasks_config['predict_review_task'],
+            context=[self.analyze_user_task(), self.analyze_item_task(), self.web_research_task()],
             output_file='report.json'
         )
 
     @crew
     def crew(self) -> Crew:
+        # Get process type from environment
+        process_type = os.getenv("PROCESS_TYPE", "hierarchical").lower()
+        
+        # Configure based on mode
+        if process_type == "hierarchical":
+            print("🏗️  Mode: HIERARCHICAL (Manager-led)")
+            exec_process = Process.hierarchical
+            exec_manager = self.manager()
+            # Explicitly list workers to ensure they are all visible to the manager
+            worker_agents = [
+                self.user_analyst(),
+                self.item_analyst(),
+                self.prediction_modeler(),
+                self.web_researcher()
+            ]
+        else:
+            print(f"⛓️  Mode: {process_type.upper()} (Sequential)")
+            exec_process = Process.sequential
+            exec_manager = None
+            worker_agents = [
+                self.user_analyst(),
+                self.item_analyst(),
+                self.prediction_modeler(),
+                self.web_researcher()
+            ]
+
         return Crew(
-            agents=self.agents,  # Automatically created by the @agent decorator
-            tasks=self.tasks,  # Automatically created by the @task decorator
-            process=Process.sequential,
-            knowledge_sources=[schema_knowledge],  # Bind global Knowledge
-            embedder={
-                "provider": "huggingface",
-                "config": {
-                    "model": "BAAI/bge-small-en-v1.5"
+            agents=worker_agents,
+            tasks=self.tasks,
+            process=exec_process,
+            manager_agent=exec_manager,
+            max_rpm=1,
+            knowledge=Knowledge(
+                collection_name="yelp_knowledge_v3",
+                sources=[schema_knowledge, eda_knowledge],
+                embedder={
+                    "provider": "sentence-transformer",
+                    "config": {"model_name": "BAAI/bge-small-en-v1.5"}
                 }
+            ),
+            embedder={
+                "provider": "sentence-transformer",
+                "config": {"model_name": "BAAI/bge-small-en-v1.5"}
             },
             verbose=True
         )

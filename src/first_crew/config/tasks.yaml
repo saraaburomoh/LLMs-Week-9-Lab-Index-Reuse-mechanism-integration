@@ -2,35 +2,58 @@
 
 analyze_user_task:
   description: >
-    Use the search_user_profile_data tool to find information about user {user_id}.
-    You MUST call the tool with a natural language search_query string, for example:
-    Action: search_user_profile_data
-    Action Input: {{"search_query": "What are the review habits and average stars for user {user_id}"}}
-    Also use search_historical_reviews_data to find past reviews written by this user.
-    Understand their average stars, what words they commonly use, and their general sentiment.
+    Step 1 [KNOWLEDGE]: Retrieve definitions for "Active User Subset", "elite", and "compliments".
+    (Retrieve dictionary definitions for these terms from the knowledge base).
+    (Then, once definitions are understood, proceed to lookup data for user {user_id})
+    
+    
+    Step 2 [DATA]: Use `lookup_user_by_id` for user {user_id}. 
+    
+    Step 3 [HISTORY]: Use `lookup_reviews_by_user_id` for history.
   expected_output: >
-    A detailed markdown profile of user {user_id}'s preferences and rating habits.
+    A markdown report including the meaning of their compliments and Elite status.
   agent: user_analyst
 
 analyze_item_task:
   description: >
-    Use the search_restaurant_feature_data tool to find information about business {item_id}.
-    You MUST call the tool with a natural language search_query string, for example:
-    Action: search_restaurant_feature_data
-    Action Input: {{"search_query": "What are the categories and star rating for business {item_id}"}}
-    Also use search_historical_reviews_data to find past reviews about this business.
-    Understand its categories, attributes, and overall public sentiment.
+    Step 1 [KNOWLEDGE]: Retrieve definitions for "Entity Item Subset", "attributes", "WiFi", and "Parking".
+    (Retrieve dictionary definitions for these terms from the knowledge base).
+    (Then, once definitions are understood, proceed to lookup data for business {item_id})
+    
+    Step 2 [DATA]: Use `lookup_item_by_id` for business {item_id}.
+    
+    Step 3 [HISTORY]: Use `lookup_reviews_by_business_id` for feedback.
   expected_output: >
-    A detailed markdown report of business {item_id}'s features, pros, and cons.
+    A markdown report explaining the business features and attributes.
   agent: item_analyst
+
+web_research_task:
+  description: >
+    Step 1: Look at the ITEM REPORT in your context to find the actual name of the business with ID {item_id}.
+    
+    Step 2: Search the internet for any status (open/closed), or trends about that specific business.
+
+    ITEM REPORT:
+    {item_context}
+  expected_output: >
+    A summary of external findings regarding the business.
+  agent: web_researcher
 
 predict_review_task:
   description: >
-    Using the User Profile and the Item Report from the previous tasks, predict the Stars (1.0 to 5.0) and write the Review Text.
-    You MUST base your prediction on the actual data retrieved by the previous agents. Do NOT say the data was not found.
-    Consider if the restaurant's features align with the user's historical preferences.
+    Using the following data, predict the Stars (1.0 to 5.0) and write the Review Text for user {user_id} and business {item_id}.
+
+    USER PROFILE:
+    {user_context}
+
+    ITEM REPORT:
+    {item_context}
+
+    WEB RESEARCH / TRENDS:
+    {web_context}
+
+    CRITICAL: Use the ACTUAL NAME of the business instead of the ID ({item_id}).
+    Tone: Match the writing style and rating habits found in the USER PROFILE.
   expected_output: >
-    Output ONLY a valid JSON object with exactly two keys: "stars" (a float from 1.0 to 5.0) and "review" (a string).
-    Use single curly braces. Example: {"stars": 4.5, "review": "The review text..."}
-    Do NOT include any text before or after the JSON object. Do NOT use double curly braces.
+    Output ONLY a valid JSON object. Example: {"stars": 4.5, "review": "The atmosphere was great..."}
   agent: prediction_modeler

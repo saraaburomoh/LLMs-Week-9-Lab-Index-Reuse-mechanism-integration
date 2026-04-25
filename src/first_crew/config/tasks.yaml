@@ -2,58 +2,69 @@
 
 analyze_user_task:
   description: >
-    Step 1 [KNOWLEDGE]: Retrieve definitions for "Active User Subset", "elite", and "compliments".
-    (Retrieve dictionary definitions for these terms from the knowledge base).
-    (Then, once definitions are understood, proceed to lookup data for user {user_id})
+    Analyze the Yelp Active User Subset record for user {user_id}.
+    1. Use the `lookup_user_by_id` tool to retrieve their profile: review_count, 
+       yelping_since, average_stars, elite years, fans count, and all compliment fields.
+    2. Use `lookup_reviews_by_user_id` to understand their writing style and preferred cuisines.
     
-    
-    Step 2 [DATA]: Use `lookup_user_by_id` for user {user_id}. 
-    
-    Step 3 [HISTORY]: Use `lookup_reviews_by_user_id` for history.
+    CRITICAL: Consult the provided Knowledge Base (Yelp Data Translation and EDA findings) 
+    to properly interpret metrics like 'Elite status', 'Fans', and 'Compliments' 
+    in the context of the overall dataset schema.
   expected_output: >
-    A markdown report including the meaning of their compliments and Elite status.
+    A detailed markdown profile of user {user_id}'s preferences, rating habits, 
+    and social influence based on the schema definitions.
   agent: user_analyst
 
 analyze_item_task:
   description: >
-    Step 1 [KNOWLEDGE]: Retrieve definitions for "Entity Item Subset", "attributes", "WiFi", and "Parking".
-    (Retrieve dictionary definitions for these terms from the knowledge base).
-    (Then, once definitions are understood, proceed to lookup data for business {item_id})
+    Analyze the Entity Item Subset record for business {item_id}.
+    1. Use the `lookup_item_by_id` tool to retrieve the business name, address, 
+       categories, star rating, is_open status, and hours.
+    2. Retrieve all attributes (WiFi, BusinessParking, Alcohol, etc.).
+    3. Use `lookup_reviews_by_business_id` to understand customer sentiment.
     
-    Step 2 [DATA]: Use `lookup_item_by_id` for business {item_id}.
-    
-    Step 3 [HISTORY]: Use `lookup_reviews_by_business_id` for feedback.
+    CRITICAL: Consult the Knowledge Base (Yelp Data Translation and EDA findings) 
+    to understand how business categories and operational attributes are mapped 
+    within the Yelp ecosystem.
   expected_output: >
-    A markdown report explaining the business features and attributes.
+    A detailed markdown report of business {item_id}'s features, pros, and cons, 
+    aligned with the official data schema.
   agent: item_analyst
 
 web_research_task:
   description: >
-    Step 1: Look at the ITEM REPORT in your context to find the actual name of the business with ID {item_id}.
-    
-    Step 2: Search the internet for any status (open/closed), or trends about that specific business.
+    Find the business name from the ITEM REPORT provided below.
+    Then search the internet for current open/closed status, recent news,
+    or social media trends about that specific business.
+    Do NOT search using the raw ID {item_id}; use only the business name.
 
     ITEM REPORT:
     {item_context}
   expected_output: >
-    A summary of external findings regarding the business.
+    A brief summary (3-5 sentences) of external findings about the business:
+    current operational status, any recent changes, and relevant trends.
   agent: web_researcher
 
 predict_review_task:
   description: >
-    Using the following data, predict the Stars (1.0 to 5.0) and write the Review Text for user {user_id} and business {item_id}.
+    Predict the star rating (1.0 to 5.0) and write a simulated review text
+    that user {user_id} would write for this business.
 
-    USER PROFILE:
+    Base your prediction STRICTLY on the data below:
+
+    === USER PROFILE ===
     {user_context}
 
-    ITEM REPORT:
+    === ITEM PROFILE ===
     {item_context}
 
-    WEB RESEARCH / TRENDS:
+    === WEB RESEARCH ===
     {web_context}
 
-    CRITICAL: Use the ACTUAL NAME of the business instead of the ID ({item_id}).
-    Tone: Match the writing style and rating habits found in the USER PROFILE.
+    Tone: Match the vocabulary and writing style found in the user's review history.
+    Business: Refer to it by its actual name, NOT the raw ID {item_id}.
   expected_output: >
-    Output ONLY a valid JSON object. Example: {"stars": 4.5, "review": "The atmosphere was great..."}
+    Output ONLY a valid JSON object with exactly two fields: "stars" (a float from 1.0 to 5.0)
+    and "review" (a string). No extra text, no markdown, no explanation.
+    Example: {"stars": 4.5, "review": "The atmosphere was great and the food exceeded expectations."}
   agent: prediction_modeler
